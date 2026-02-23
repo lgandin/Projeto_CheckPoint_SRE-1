@@ -18,6 +18,7 @@ jobs:
 
       - name: Executar deploy
         id: deploy
+        #Ponto que precisa de atenção é a troca da versão, é uma dependencia do script sh, ja mapeie este problema e estou ajustando, enquanto isso sera preciso mudar diretamente no yml. ( Leonardo Gandin - 23/02/26 )
         run: ./Deploy/deploy.sh 1.0.1
 
       - name: Deploy OK

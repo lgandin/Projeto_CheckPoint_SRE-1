@@ -20,7 +20,8 @@ def home():
     
     return jsonify({
         "message": "Aplicação SRE Nível 1",
-        "version": os.getenv("APP_VERSION", "1.0.0")
+        "version": os.getenv("APP_VERSION", "1.0.0"),
+        "total_requests": metrics["total_requests"]
     })
 
 @app.route('/health')

@@ -2,7 +2,7 @@ name: Deploy com rollback automático
 
 on:
   workflow_run:
-    workflows: ["test.yml"]
+    workflows: ["test"]
     branches: [ main ]
     types:
       - completed

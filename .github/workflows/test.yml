@@ -25,9 +25,7 @@ jobs:
           pip install -r tests/requirements.txt
       
       - name: Executar testes
-        run: |
-          cd tests
-          pytest -v test_app.py
+        run: pytest -v
       
       - name: Mostrar resultado
         run: echo "✅ Todos os testes passaram!"

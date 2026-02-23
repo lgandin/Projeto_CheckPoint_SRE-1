@@ -1,0 +1,19 @@
+O deploy é o processo de colocar uma nova versão da aplicação em produção
+
+Execute o ./deploy.sh após finalizar os ajustes necessarios. E somnente execute ele quando houver necessidade de atualizar funcionalidades ou corrigir bugs.
+
+O que o script esta executando:
+
+1° - Constrói a imagem Docker dessa versão.
+
+2° - Para e remove o container antigo (se existir).
+
+3° - Salva a versão atual como “previous” para poder reverter depois.
+
+4 ° - Inicia um novo container com a versão especificada.
+
+5° - Espera a aplicação iniciar e faz um health check para garantir que está funcionando.
+
+6° - Se o health check falhar, indica que é necessário fazer rollback. Processo e script no diretorio /roolback.
+
+

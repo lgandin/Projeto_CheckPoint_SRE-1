@@ -1,0 +1,18 @@
+O rollback é o processo de restaurar a aplicação para uma versão anterior quando algo dá errado no deploy.
+
+Ele garante que o serviço volte a funcionar sem interrupções prolongadas.
+
+O que o script esta executando:
+
+1° - Para e remove o container atual que está com problema.
+
+2° - Verifica se existe uma versão anterior (tag previous) disponível.
+
+3° - Inicia o container com a versão anterior da aplicação.
+
+4° - Espera a aplicação iniciar e faz um health check para confirmar que voltou a funcionar.
+
+5° - Se a versão anterior não funcionar, avisa que o rollback falhou.
+
+Para efetuar o Deploy, documentação e script esta localizado no diretorio /deploy.
+

@@ -1,7 +1,4 @@
-import sys
-sys.path.insert(0, '../app')
-
-from app import app
+from app.app import app
 import pytest
 
 @pytest.fixture

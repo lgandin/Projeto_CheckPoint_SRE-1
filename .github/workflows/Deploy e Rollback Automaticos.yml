@@ -2,7 +2,7 @@ name: Deploy com rollback automático
 
 on:
   workflow_run:
-    workflows: ["test"]
+    workflows: ["Testes Automatizados"]
     branches: [ main ]
     types:
       - completed

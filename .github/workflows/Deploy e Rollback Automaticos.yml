@@ -1,0 +1,44 @@
+name: Deploy com rollback automático
+
+on:
+  workflow_run:
+    workflows: ["test.yml"]
+    branches: [ main ]
+    types:
+      - completed
+
+env:
+  APP_NAME: meu-app
+
+jobs:
+  deploy:
+    # só faz deploy se o workflow de testes terminou com sucesso
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Executar deploy
+        id: deploy
+        run: ./Deploy/deploy.sh
+        continue-on-error: true
+
+      - name: Falha a job, se o deploy falhou
+        if: steps.deploy.outcome == 'failure'
+        run: |
+          echo "Deploy falhou, job esta com status de failure, sera disparado rollback."
+          exit 1
+
+  rollback:
+    needs: deploy
+    if: needs.deploy.result == 'failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Executar rollback
+        run: ./Rollback/rollback.sh

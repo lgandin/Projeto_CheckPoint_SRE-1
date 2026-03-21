@@ -10,12 +10,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     outputs:
-      duration: ${{ steps.timer.outputs.duration }}
+      duration: ${{ steps.calc.outputs.duration }}
 
     steps:
-      - name: Calculate duration
-        id: calc
-        run: echo "duration=..." >> $GITHUB_OUTPUT
+      - name: Start timer
+        id: timer
+        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
 
       - name: Checkout do código
         uses: actions/checkout@v3
@@ -38,13 +38,13 @@ jobs:
         run: echo "Todos os testes passaram!"
 
       - name: Calculate duration
+        id: calc
         if: always()
         run: |
           END=$(date +%s)
           START=${{ steps.timer.outputs.start }}
           echo "duration=$((END - START))" >> $GITHUB_OUTPUT
 
-  # ── Envia métricas ao Zabbix — roda sempre, mesmo se falhar
   zabbix:
     name: Report to Zabbix
     needs: test

@@ -1,0 +1,328 @@
+name: Zabbix Metrics Sender
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_type:
+        description: "Tipo do pipeline: build | test | deploy | sonar"
+        required: true
+        type: string
+      pipeline_status:
+        description: "Status: success | failure | cancelled"
+        required: true
+        type: string
+      pipeline_duration:
+        description: "Duração em segundos"
+        required: false
+        type: string
+        default: "0"
+      environment:
+        description: "Ambiente: dev | homolog | production"
+        required: false
+        type: string
+        default: "dev"
+    secrets:
+      TAILSCALE_AUTHKEY:
+        required: true
+      ZABBIX_URL:
+        required: true
+      ZABBIX_USER:
+        required: true
+      ZABBIX_PASSWORD:
+        required: true
+
+jobs:
+  send-metrics:
+    name: Send metrics to Zabbix
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Conecta à rede Tailscale ──────────────────────────
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          tags: tag:github-actions
+
+      # ── Aguarda a VPN estabilizar ─────────────────────────
+      - name: Wait for Tailscale
+        run: sleep 5
+
+      # ── Envia métricas ao Zabbix via API ─────────────────
+      - name: Send to Zabbix
+        env:
+          ZABBIX_URL: ${{ secrets.ZABBIX_URL }}
+          ZABBIX_USER: ${{ secrets.ZABBIX_USER }}
+          ZABBIX_PASSWORD: ${{ secrets.ZABBIX_PASSWORD }}
+          PIPELINE_TYPE: ${{ inputs.pipeline_type }}
+          PIPELINE_STATUS: ${{ inputs.pipeline_status }}
+          PIPELINE_DURATION: ${{ inputs.pipeline_duration }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REPO_NAME: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # ── Converte status para número ──
+          STATUS_CODE=0
+          case "$PIPELINE_STATUS" in
+            success)   STATUS_CODE=1 ;;
+            failure)   STATUS_CODE=0 ;;
+            cancelled) STATUS_CODE=2 ;;
+          esac
+
+          # ── Normaliza nome do repo (remove / e espaços) ──
+          REPO_SAFE=$(echo "$REPO_NAME" | tr '/' '_' | tr ' ' '_')
+          HOST_NAME="github-${REPO_SAFE}"
+
+          # ── Login na API do Zabbix ──
+          echo "Autenticando no Zabbix..."
+          AUTH_RESPONSE=$(curl -sf \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"jsonrpc\": \"2.0\",
+              \"method\": \"user.login\",
+              \"params\": {
+                \"username\": \"${ZABBIX_USER}\",
+                \"password\": \"${ZABBIX_PASSWORD}\"
+              },
+              \"id\": 1
+            }" \
+            "${ZABBIX_URL}/api_jsonrpc.php")
+
+          AUTH_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['result'])")
+
+          if [ -z "$AUTH_TOKEN" ]; then
+            echo "Erro ao autenticar no Zabbix"
+            echo "$AUTH_RESPONSE"
+            exit 1
+          fi
+
+          echo "Autenticado com sucesso."
+
+          # ── Verifica se o host existe ──
+          HOST_RESPONSE=$(curl -sf \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${AUTH_TOKEN}" \
+            -d "{
+              \"jsonrpc\": \"2.0\",
+              \"method\": \"host.get\",
+              \"params\": {
+                \"filter\": { \"host\": [\"${HOST_NAME}\"] }
+              },
+              \"id\": 2
+            }" \
+            "${ZABBIX_URL}/api_jsonrpc.php")
+
+          HOST_ID=$(echo "$HOST_RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          hosts = data.get('result', [])
+          print(hosts[0]['hostid'] if hosts else '')
+          ")
+
+          # ── Cria o host se não existir ──
+          if [ -z "$HOST_ID" ]; then
+            echo "Criando host ${HOST_NAME} no Zabbix..."
+
+            # Busca grupo "GitHub Pipelines" ou cria
+            GROUP_RESPONSE=$(curl -sf \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -d "{
+                \"jsonrpc\": \"2.0\",
+                \"method\": \"hostgroup.get\",
+                \"params\": {
+                  \"filter\": { \"name\": [\"GitHub Pipelines\"] }
+                },
+                \"id\": 3
+              }" \
+              "${ZABBIX_URL}/api_jsonrpc.php")
+
+            GROUP_ID=$(echo "$GROUP_RESPONSE" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            groups = data.get('result', [])
+            print(groups[0]['groupid'] if groups else '')
+            ")
+
+            if [ -z "$GROUP_ID" ]; then
+              echo "Criando grupo GitHub Pipelines..."
+              GROUP_CREATE=$(curl -sf \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" \
+                -d "{
+                  \"jsonrpc\": \"2.0\",
+                  \"method\": \"hostgroup.create\",
+                  \"params\": { \"name\": \"GitHub Pipelines\" },
+                  \"id\": 4
+                }" \
+                "${ZABBIX_URL}/api_jsonrpc.php")
+              GROUP_ID=$(echo "$GROUP_CREATE" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['groupids'][0])")
+            fi
+
+            # Cria o host
+            HOST_CREATE=$(curl -sf \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -d "{
+                \"jsonrpc\": \"2.0\",
+                \"method\": \"host.create\",
+                \"params\": {
+                  \"host\": \"${HOST_NAME}\",
+                  \"name\": \"${REPO_NAME}\",
+                  \"groups\": [{ \"groupid\": \"${GROUP_ID}\" }],
+                  \"interfaces\": [{
+                    \"type\": 1,
+                    \"main\": 1,
+                    \"useip\": 1,
+                    \"ip\": \"127.0.0.1\",
+                    \"dns\": \"\",
+                    \"port\": \"10050\"
+                  }],
+                  \"tags\": [
+                    { \"tag\": \"source\", \"value\": \"github-actions\" },
+                    { \"tag\": \"repo\", \"value\": \"${REPO_NAME}\" },
+                    { \"tag\": \"owner\", \"value\": \"${REPO_OWNER}\" }
+                  ]
+                },
+                \"id\": 5
+              }" \
+              "${ZABBIX_URL}/api_jsonrpc.php")
+
+            HOST_ID=$(echo "$HOST_CREATE" | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['hostids'][0])")
+            echo "Host criado com ID: ${HOST_ID}"
+          else
+            echo "Host encontrado com ID: ${HOST_ID}"
+          fi
+
+          # ── Função para criar item se não existir e enviar valor ──
+          send_metric() {
+            local KEY="$1"
+            local VALUE="$2"
+            local NAME="$3"
+            local VALUE_TYPE="$4"  # 0=float, 1=char, 3=unsigned, 4=text
+
+            # Verifica se o item existe
+            ITEM_RESPONSE=$(curl -sf \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -d "{
+                \"jsonrpc\": \"2.0\",
+                \"method\": \"item.get\",
+                \"params\": {
+                  \"hostids\": [\"${HOST_ID}\"],
+                  \"filter\": { \"key_\": [\"${KEY}\"] }
+                },
+                \"id\": 6
+              }" \
+              "${ZABBIX_URL}/api_jsonrpc.php")
+
+            ITEM_ID=$(echo "$ITEM_RESPONSE" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            items = data.get('result', [])
+            print(items[0]['itemid'] if items else '')
+            ")
+
+            # Cria o item se não existir
+            if [ -z "$ITEM_ID" ]; then
+              ITEM_CREATE=$(curl -sf \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${AUTH_TOKEN}" \
+                -d "{
+                  \"jsonrpc\": \"2.0\",
+                  \"method\": \"item.create\",
+                  \"params\": {
+                    \"hostid\": \"${HOST_ID}\",
+                    \"name\": \"${NAME}\",
+                    \"key_\": \"${KEY}\",
+                    \"type\": 2,
+                    \"value_type\": ${VALUE_TYPE},
+                    \"delay\": \"0\",
+                    \"history\": \"90d\",
+                    \"trends\": \"365d\",
+                    \"tags\": [
+                      { \"tag\": \"pipeline_type\", \"value\": \"${PIPELINE_TYPE}\" },
+                      { \"tag\": \"repo\", \"value\": \"${REPO_NAME}\" }
+                    ]
+                  },
+                  \"id\": 7
+                }" \
+                "${ZABBIX_URL}/api_jsonrpc.php")
+              ITEM_ID=$(echo "$ITEM_CREATE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['itemids'][0] if 'result' in d else '')")
+              echo "Item criado: ${KEY} (ID: ${ITEM_ID})"
+            fi
+
+            # Envia o valor via history.push (Zabbix 7.0+)
+            curl -sf \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${AUTH_TOKEN}" \
+              -d "{
+                \"jsonrpc\": \"2.0\",
+                \"method\": \"history.push\",
+                \"params\": {
+                  \"itemid\": \"${ITEM_ID}\",
+                  \"value\": \"${VALUE}\"
+                },
+                \"id\": 8
+              }" \
+              "${ZABBIX_URL}/api_jsonrpc.php" > /dev/null
+
+            echo "Métrica enviada: ${KEY} = ${VALUE}"
+          }
+
+          # ── Envia todas as métricas ──────────────────────
+          echo "Enviando métricas para o Zabbix..."
+
+          send_metric \
+            "pipeline.status[${PIPELINE_TYPE}]" \
+            "${STATUS_CODE}" \
+            "Pipeline ${PIPELINE_TYPE} - status" \
+            "3"
+
+          send_metric \
+            "pipeline.duration[${PIPELINE_TYPE}]" \
+            "${PIPELINE_DURATION}" \
+            "Pipeline ${PIPELINE_TYPE} - duração (s)" \
+            "3"
+
+          send_metric \
+            "pipeline.branch[${PIPELINE_TYPE}]" \
+            "${BRANCH}" \
+            "Pipeline ${PIPELINE_TYPE} - branch" \
+            "1"
+
+          send_metric \
+            "pipeline.run_number[${PIPELINE_TYPE}]" \
+            "${RUN_NUMBER}" \
+            "Pipeline ${PIPELINE_TYPE} - número da execução" \
+            "3"
+
+          send_metric \
+            "pipeline.actor[${PIPELINE_TYPE}]" \
+            "${ACTOR}" \
+            "Pipeline ${PIPELINE_TYPE} - executado por" \
+            "1"
+
+          send_metric \
+            "pipeline.commit[${PIPELINE_TYPE}]" \
+            "${COMMIT_SHA:0:7}" \
+            "Pipeline ${PIPELINE_TYPE} - commit" \
+            "1"
+
+          send_metric \
+            "pipeline.environment[${PIPELINE_TYPE}]" \
+            "${ENVIRONMENT}" \
+            "Pipeline ${PIPELINE_TYPE} - ambiente" \
+            "1"
+
+          echo "Todas as métricas enviadas com sucesso!"
+
+      # ── Desconecta do Tailscale ───────────────────────────
+      - name: Disconnect Tailscale
+        if: always()
+        run: sudo tailscale down || true

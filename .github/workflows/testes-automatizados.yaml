@@ -13,9 +13,9 @@ jobs:
       duration: ${{ steps.timer.outputs.duration }}
 
     steps:
-      - name: Start timer
-        id: timer
-        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
+      - name: Calculate duration
+        id: calc
+        run: echo "duration=..." >> $GITHUB_OUTPUT
 
       - name: Checkout do código
         uses: actions/checkout@v3

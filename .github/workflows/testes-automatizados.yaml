@@ -1,0 +1,63 @@
+name: Testes Automatizados
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ── Seu job original — sem nenhuma alteração ─────────────
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      duration: ${{ steps.timer.outputs.duration }}
+
+    steps:
+      - name: Start timer
+        id: timer
+        run: echo "start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout do código
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências
+        run: |
+          pip install -r app/requirements.txt
+          pip install -r tests/requirements.txt
+
+      - name: Executar testes
+        run: |
+          python -m pytest -v
+
+      - name: Mostrar resultado
+        run: echo "Todos os testes passaram!"
+
+      - name: Calculate duration
+        if: always()
+        run: |
+          END=$(date +%s)
+          START=${{ steps.timer.outputs.start }}
+          echo "duration=$((END - START))" >> $GITHUB_OUTPUT
+
+  # ── Envia métricas ao Zabbix — roda sempre, mesmo se falhar
+  zabbix:
+    name: Report to Zabbix
+    needs: test
+    if: always()
+    uses: ./.github/workflows/zabbix-metrics.yml
+    with:
+      pipeline_type: "test"
+      pipeline_status: ${{ needs.test.result }}
+      pipeline_duration: ${{ needs.test.outputs.duration }}
+      environment: "dev"
+    secrets:
+      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      ZABBIX_URL: ${{ secrets.ZABBIX_URL }}
+      ZABBIX_USER: ${{ secrets.ZABBIX_USER }}
+      ZABBIX_PASSWORD: ${{ secrets.ZABBIX_PASSWORD }}
